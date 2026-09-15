@@ -129,6 +129,47 @@ tape.test("writer & reader", function(test) {
         test.end();
     });
 
+    // overlong / out of range utf8 sequences (CVE-2026-44288)
+
+    test.test(test.name + " - should decode overlong utf8 as replacement characters", function(test) {
+        var root = protobuf.Root.fromJSON({
+            nested: {
+                OverlongMessage: {
+                    fields: {
+                        value: { type: "string", id: 1 }
+                    }
+                }
+            }
+        });
+        var OverlongMessage = root.lookupType("OverlongMessage");
+
+        var replacementChar = String.fromCharCode(0xFFFD);
+
+        var overlong = [
+            [ 0xC0, 0x80 ],             // U+0000 encoded as two bytes
+            [ 0xE0, 0x81, 0xBF ],       // U+007F encoded as three bytes
+            [ 0xF0, 0x80, 0x9F, 0xBF ], // U+07FF encoded as four bytes
+            [ 0xF4, 0x90, 0x80, 0x80 ]  // >U+10FFFF encoded as four bytes
+        ];
+        overlong.forEach(function(bytes) {
+            // field 1, wire type 2 (length delimited) carrying the raw bytes.
+            // a Uint8Array (instead of a node Buffer) makes sure the pure
+            // javascript reader, and with it the library's own utf8 decoder,
+            // is used instead of node's native decoder
+            var buffer = new Uint8Array([ 0x0A, bytes.length ].concat(bytes));
+
+            var reader = Reader.create(buffer);
+            test.notOk(reader instanceof protobuf.BufferReader, "should use the pure javascript reader for [" + bytes + "]");
+            reader.uint32(); // consumes the tag
+            test.equal(reader.string(), replacementChar, "should read [" + bytes + "] as a replacement character");
+
+            var message = OverlongMessage.decode(Reader.create(buffer));
+            test.equal(message.value, replacementChar, "should decode [" + bytes + "] to a replacement character");
+        });
+
+        test.end();
+    });
+
     test.end();
 });
 

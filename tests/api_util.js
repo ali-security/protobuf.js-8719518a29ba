@@ -108,5 +108,39 @@ tape.test("util", function(test) {
         test.end();
     });
 
+    test.test(test.name + " - utf8", function(test) {
+
+        var replacementChar = String.fromCharCode(0xFFFD);
+
+        // the decoder actually shipped with the library must reject overlong
+        // and out of range sequences instead of decoding them to unintended
+        // code points (CVE-2026-44288)
+        var overlong = [
+            [ 0xC0, 0x80 ],             // U+0000 encoded as two bytes
+            [ 0xE0, 0x81, 0xBF ],       // U+007F encoded as three bytes
+            [ 0xF0, 0x80, 0x9F, 0xBF ], // U+07FF encoded as four bytes
+            [ 0xF4, 0x90, 0x80, 0x80 ]  // >U+10FFFF encoded as four bytes
+        ];
+        overlong.forEach(function(bytes) {
+            var buffer = new Uint8Array(bytes);
+            test.equal(util.utf8.read(buffer, 0, buffer.length), replacementChar, "should decode [" + bytes + "] to a replacement character");
+        });
+
+        // valid sequences must keep decoding as before
+        var valid = [
+            [ [ 0x24 ], "$" ],                                                                   // U+0024
+            [ [ 0xC2, 0xA2 ], String.fromCharCode(0x00A2) ],                                     // U+00A2
+            [ [ 0xE2, 0x82, 0xAC ], String.fromCharCode(0x20AC) ],                               // U+20AC
+            [ [ 0xF0, 0x9F, 0x98, 0x80 ], String.fromCharCode(0xD83D) + String.fromCharCode(0xDE00) ], // U+1F600
+            [ [ 0xF4, 0x8F, 0xBF, 0xBF ], String.fromCharCode(0xDBFF) + String.fromCharCode(0xDFFF) ]  // U+10FFFF
+        ];
+        valid.forEach(function(pair) {
+            var buffer = new Uint8Array(pair[0]);
+            test.equal(util.utf8.read(buffer, 0, buffer.length), pair[1], "should still decode [" + pair[0] + "] correctly");
+        });
+
+        test.end();
+    });
+
     test.end();
 });
