@@ -216,3 +216,52 @@ tape.test("feature resolution edition 2023", function(test) {
 
     test.end();
 });
+
+tape.test("type names are sanitized before reaching codegen", function(test) {
+
+    // A message name is interpolated verbatim into the "function <name>(...){...}"
+    // template used by util.codegen, which is then evaluated through Function().
+    // This payload closes that template, assigns a global and re-opens a function
+    // expression, so an unsanitized name executes attacker code while the generated
+    // function keeps working (silent injection).
+    var NAME = "Evil(){}, global.__pbjsInjected2026__ = true, function Evil";
+    var SANITIZED = "Evilglobal__pbjsInjected2026__truefunctionEvil";
+
+    delete global.__pbjsInjected2026__;
+
+    // the sink is live: fed the raw name, codegen executes the payload
+    var injected = protobuf.util.codegen(["p"], NAME)("return p")();
+    test.equal(global.__pbjsInjected2026__, true, "codegen should execute an unsanitized name (proves the sink)");
+    test.equal(typeof injected, "function", "codegen should still return a function when injected");
+    test.equal(injected(42), 42, "the injected function should still work, making the injection silent");
+    delete global.__pbjsInjected2026__;
+
+    // the reflected type filters the name before anything can be generated from it
+    var type = new protobuf.Type(NAME);
+    test.equal(type.name, SANITIZED, "should strip non-word characters from the type name");
+    test.ok(/^\w+$/.test(type.name), "sanitized name should consist of word characters only");
+    test.equal(global.__pbjsInjected2026__, undefined, "constructing a type with a hostile name should not execute it");
+
+    // the generated constructor is built from the sanitized name
+    test.equal(typeof type.ctor, "function", "should generate a constructor for a hostile name");
+    test.equal(global.__pbjsInjected2026__, undefined, "generating the constructor should not execute the hostile name");
+
+    // same through the JSON descriptor path, which reaches the encoder, decoder,
+    // verifier and converter code generators
+    var json = { nested: {} };
+    json.nested[NAME] = { fields: { a: { type: "string", id: 1 } } };
+    var root = protobuf.Root.fromJSON(json);
+    var Evil = root.lookupType(SANITIZED);
+    test.equal(Evil.name, SANITIZED, "should sanitize names coming from JSON descriptors");
+
+    var buffer = Evil.encode(Evil.fromObject({ a: "hi" })).finish();
+    test.equal(Evil.toObject(Evil.decode(buffer)).a, "hi", "encode, decode, fromObject and toObject should still work");
+    test.equal(Evil.verify({ a: "hi" }), null, "verify should still work");
+    test.equal(global.__pbjsInjected2026__, undefined, "no code generator should execute the hostile name");
+
+    // valid names keep working unchanged
+    test.equal(new protobuf.Type("My_Type1").name, "My_Type1", "should leave valid names unchanged");
+
+    delete global.__pbjsInjected2026__;
+    test.end();
+});
